@@ -39,14 +39,17 @@ void layer(void *args) {
         .bitwidth = featureBitwidth8Bit
     };
 
-    // TODO: What should I set this to?
+    // Normalization: each output channel's accumulator is multiplied by its
+    // 32-bit scale (normalization_scale.h, all ones here). No per-channel bias
+    // or shift is used, so the global shift below applies to every channel.
     const nnx_norm_t nnx_norm = {
         .mode  = normMode32Bit,
         .flag_bias  = FLAG_UNUSED,
         .flag_shift = FLAG_UNUSED
     };
 
-    // TODO: What should I set this to?
+    // Quantization: shift the result right by OUTSHIFT and clip it to 8 bits
+    // with a ReLU (0..255), matching the golden output of parameters_generate.py.
     const nnx_quant_t nnx_quant = {
         .shift_amount = OUTSHIFT,
         .mode = quantMode8Bit,

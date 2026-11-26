@@ -16,8 +16,7 @@
 # limitations under the License.
 import os
 import argparse
-import torch
-import torch.nn.functional as F
+import numpy as np
 from Ne16 import *
 
 def license(filename):
@@ -191,33 +190,46 @@ def clip(x, bits, signed=False):
 
 def create_input(channels, spatial_dim):
     size = (1, channels, spatial_dim, spatial_dim)
-    return torch.randint(low=0, high=100, size=size, dtype=torch.int32)
+    return np.random.randint(low=0, high=100, size=size, dtype=np.int32)
 
 def create_weights(shape):
     """ Create weights
 
     Shape is of layout (Cout, H, W, Cin)
     """
-    size = (shape[0], shape[3], shape[1], shape[2])  # Torch expects layout (Cout, Cin, H, W)
-    return torch.randint(low=0, high=5, size=size, dtype=torch.int32)
+    size = (shape[0], shape[3], shape[1], shape[2])  # conv2d expects layout (Cout, Cin, H, W)
+    return np.random.randint(low=0, high=5, size=size, dtype=np.int32)
+
+def conv2d(x, w):
+    """ Valid (no padding), stride-1 2D convolution
+
+    x layout: (N, Cin, H, W), w layout: (Cout, Cin, Kh, Kw) -> (N, Cout, H-Kh+1, W-Kw+1)
+    """
+    _, _, h, wd = x.shape
+    _, _, kh, kw = w.shape
+    oh, ow = h - kh + 1, wd - kw + 1
+    y = np.zeros((x.shape[0], w.shape[0], oh, ow), dtype=np.int64)
+    for i in range(kh):
+        for j in range(kw):
+            y += np.einsum('nchw,oc->nohw', x[:, :, i:i+oh, j:j+ow], w[:, :, i, j], dtype=np.int64)
+    return y.astype(np.int32)
 
 def create_layer(cin, cout, spatial_dim, kernel_shape, outshift=8):
     x = create_input(cin, spatial_dim + kernel_shape - 1)
-    x_save = x.permute(0, 2, 3, 1).type(torch.int32)
+    x_save = x.transpose(0, 2, 3, 1)
     generate_vector_header("input", x_save)
 
     w = create_weights((cout, kernel_shape, kernel_shape, cin))
-    w_save = Ne16().conv_unroll(w.numpy(), 8, layout="CoutCinK", dw=False)
+    w_save = Ne16().conv_unroll(w, 8, layout="CoutCinK", dw=False)
     generate_vector_header("weights", w_save)
 
-    #norm_scale = torch.ones((1, channels, 1, 1), dtype=torch.int32)
     norm_scale = np.ones((1, cout, 1, 1), dtype='<i4')
     generate_vector_header("normalization_scale", norm_scale.tobytes())
     
-    y = F.conv2d(x, w).type(torch.int32)
-    y = torch.from_numpy(norm_scale) * y
+    y = conv2d(x, w)
+    y = norm_scale * y
     y = clip(y >> outshift, 8)
-    y_save = y.permute(0, 2, 3, 1).type(torch.int32)
+    y_save = y.transpose(0, 2, 3, 1)
     generate_vector_header("output", None, golden=y_save)
 
     generate_dims_header('dims',
